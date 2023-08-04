@@ -3,15 +3,18 @@ package com.alibaba.otter.canal.client.adapter.es7x.support;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
 import javax.sql.DataSource;
 
+import com.google.common.collect.Sets;
 import org.apache.commons.lang.StringUtils;
 import org.elasticsearch.action.search.SearchResponse;
 import org.elasticsearch.cluster.metadata.MappingMetaData;
@@ -118,8 +121,23 @@ public class ES7xTemplate implements ESTemplate {
 
         // 查询sql批量更新
         DataSource ds = DatasourceConfig.DATA_SOURCES.get(config.getDataSourceKey());
-        StringBuilder sql = new StringBuilder("SELECT * FROM (" + mapping.getSql() + ") _v WHERE ");
         List<Object> values = new ArrayList<>();
+
+        String sqlToUse = mapping.getSql();
+        if (sqlToUse.contains("/*") && sqlToUse.contains("*/")) {
+            List<String> placeholders = parseCommentSql(sqlToUse);
+            Set<String> placeholderSet = Sets.newHashSet(placeholders);
+            // 判断 :param 占位符是否都包含
+            Set<String> inters = Sets.intersection(paramsTmp.keySet(), placeholderSet);
+            if (inters.size() == placeholderSet.size()) {
+                for(String holder : placeholders) {
+                    sqlToUse = sqlToUse.replace("/*", "").replace("*/","")
+                            .replace(":"+holder, "?");
+                    values.add(paramsTmp.get(holder));
+                }
+            }
+        }
+        StringBuilder sql = new StringBuilder("SELECT * FROM (" + sqlToUse + ") _v WHERE ");
         paramsTmp.forEach((fieldName, value) -> {
             sql.append("_v.").append(fieldName).append("=? AND ");
             values.add(value);
@@ -127,6 +145,7 @@ public class ES7xTemplate implements ESTemplate {
         // TODO 直接外部包裹sql会导致全表扫描性能低, 待优化拼接内部where条件
         int len = sql.length();
         sql.delete(len - 4, len);
+        logger.debug("updateByQuery {}, values {}", sql, values);
         Integer syncCount = (Integer) Util.sqlRS(ds, sql.toString(), values, rs -> {
             int count = 0;
             try {
@@ -144,6 +163,37 @@ public class ES7xTemplate implements ESTemplate {
         if (logger.isTraceEnabled()) {
             logger.trace("Update ES by query affected {} records", syncCount);
         }
+    }
+
+    private List<String> parseCommentSql(String sql) {
+        if (!(sql.contains("/*") && sql.contains("*/"))) {
+            return Collections.EMPTY_LIST;
+        }
+        String commentSql = sql.substring(sql.indexOf("/*")+2, sql.indexOf("*/"));
+        List<String> place = new ArrayList<>();
+        int idx = 0;
+        String holder = "";
+        for (int i = 0; i < commentSql.length(); i++) {
+            char c = commentSql.charAt(i);
+            if (c == ':') {
+                idx = i;
+                continue;
+            }
+            if (idx == 0) {
+                continue;
+            }
+            if (c != ' ') {
+                holder = holder + c;
+            }
+            if (c == ' ' || i == commentSql.length()-1) {
+                if (holder.length() > 0) {
+                    place.add(holder);
+                }
+                holder = "";
+                idx = 0;
+            }
+        }
+        return place;
     }
 
     @Override
