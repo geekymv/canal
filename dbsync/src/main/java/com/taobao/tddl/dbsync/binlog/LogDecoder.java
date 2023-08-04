@@ -456,8 +456,8 @@ public final class LogDecoder {
                     return event;
                 } else {
                     if (logger.isWarnEnabled()) {
-                        logger.warn("Skipping unrecognized binlog event " + LogEvent.getTypeName(header.getType())
-                                    + " from: " + context.getLogPosition());
+                        logger.warn("Skipping unrecognized binlog event " + header.getType() + " type name " + LogEvent.getTypeName(header.getType())
+                                + " from: " + context.getLogPosition());
                     }
                 }
         }
